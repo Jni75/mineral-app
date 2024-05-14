@@ -313,50 +313,51 @@ export async function execReset(
   client: SuiClient,
   wallet: Ed25519Keypair
 ): Promise<SuiTransactionBlockResponse | null> {
-  const bus = await fetchBus(client);
+  process.exit()
+  // const bus = await fetchBus(client);
 
-  const shared = await getSharedVersion(bus.id, client);
-  const threshold = Number(bus.lastReset) + constants.EPOCH_LENGTH;
+  // const shared = await getSharedVersion(bus.id, client);
+  // const threshold = Number(bus.lastReset) + constants.EPOCH_LENGTH;
 
-  const now = Date.now();
-  if (now >= threshold) {
-    const txb = new TransactionBlock();
-    epochReset(txb, {
-      config: CONFIG,
-      buses: BUSES.map((x) =>
-        txb.sharedObjectRef({
-          objectId: x,
-          mutable: true,
-          initialSharedVersion: shared,
-        })
-      ),
-      clock: SUI_CLOCK_OBJECT_ID,
-    });
+  // const now = Date.now();
+  // if (now >= threshold) {
+  //   const txb = new TransactionBlock();
+  //   epochReset(txb, {
+  //     config: CONFIG,
+  //     buses: BUSES.map((x) =>
+  //       txb.sharedObjectRef({
+  //         objectId: x,
+  //         mutable: true,
+  //         initialSharedVersion: shared,
+  //       })
+  //     ),
+  //     clock: SUI_CLOCK_OBJECT_ID,
+  //   });
 
-    const preSign = await buildTx(txb, client, wallet);
+  //   const preSign = await buildTx(txb, client, wallet);
 
-    const dry = await client.dryRunTransactionBlock({
-      transactionBlock: preSign.bytes,
-    });
+  //   const dry = await client.dryRunTransactionBlock({
+  //     transactionBlock: preSign.bytes,
+  //   });
 
-    if (dry.effects.status.status === "failure") {
-      const errMsg = dry.effects.status.error;
-      if (errMsg) {
-        if (errMsg.includes(constants.EResetTooEarly.toString())) {
-          return null;
-        } else {
-          const contractErr = extractError(dry.effects.status);
-          throw Error(contractErr ? contractErr : errMsg);
-        }
-      } else {
-        throw Error("Unknown failure");
-      }
-    }
+  //   if (dry.effects.status.status === "failure") {
+  //     const errMsg = dry.effects.status.error;
+  //     if (errMsg) {
+  //       if (errMsg.includes(constants.EResetTooEarly.toString())) {
+  //         return null;
+  //       } else {
+  //         const contractErr = extractError(dry.effects.status);
+  //         throw Error(contractErr ? contractErr : errMsg);
+  //       }
+  //     } else {
+  //       throw Error("Unknown failure");
+  //     }
+  //   }
 
-    const res = await ship(preSign, client, { showObjectChanges: true });
+  //   const res = await ship(preSign, client, { showObjectChanges: true });
 
-    return res;
-  }
+  //   return res;
+  // }
 
   return null;
 }
