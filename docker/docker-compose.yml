@@ -29,4 +29,34 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
-      WALLET: ${WALLET3}            
+      WALLET: ${WALLET3}
+
+  miner4:
+    image: sui/mineral-cli
+    container_name: mineral-miner-4
+    cpuset: "4"
+    stop_grace_period: 1s
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      WALLET: ${WALLET4}
+
+  miner5:
+    image: sui/mineral-cli
+    container_name: mineral-miner-5
+    cpuset: "5"
+    stop_grace_period: 1s
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      WALLET: ${WALLET5}
+
+  miner6:
+    image: sui/mineral-cli
+    container_name: mineral-miner-6
+    cpuset: "6"
+    stop_grace_period: 1s
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      WALLET: ${WALLET6}
