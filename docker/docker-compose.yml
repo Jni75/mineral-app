@@ -1,0 +1,62 @@
+name: mineral
+
+services:
+  miner1:
+    image: sui/mineral-cli
+    container_name: mineral-miner-1
+    cpuset: "1"
+    stop_grace_period: 1s
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      WALLET: ${WALLET1}
+
+  miner2:
+    image: sui/mineral-cli
+    container_name: mineral-miner-2
+    cpuset: "2"
+    stop_grace_period: 1s
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      WALLET: ${WALLET2}
+
+  miner3:
+    image: sui/mineral-cli
+    container_name: mineral-miner-3
+    cpuset: "3"
+    stop_grace_period: 1s
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      WALLET: ${WALLET3}
+
+  miner4:
+    image: sui/mineral-cli
+    container_name: mineral-miner-4
+    cpuset: "4"
+    stop_grace_period: 1s
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      WALLET: ${WALLET4}
+
+  miner5:
+    image: sui/mineral-cli
+    container_name: mineral-miner-5
+    cpuset: "5"
+    stop_grace_period: 1s
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      WALLET: ${WALLET5}
+
+  miner6:
+    image: sui/mineral-cli
+    container_name: mineral-miner-6
+    cpuset: "6"
+    stop_grace_period: 1s
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      WALLET: ${WALLET6}
