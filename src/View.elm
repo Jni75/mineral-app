@@ -9,13 +9,9 @@ import Helpers.View exposing (cappedWidth, style, when, whenAttr, whenJust)
 import Html exposing (Html)
 import Html.Attributes
 import Img
-import Maybe.Extra exposing (unwrap)
+import Maybe.Extra exposing (isNothing, unwrap)
 import Types exposing (..)
 import Utils exposing (..)
-
-
-startTime =
-    0
 
 
 view : Model -> Html Msg
@@ -24,8 +20,7 @@ view model =
       , text "MINERAL"
             |> el [ Font.size 70, displayFont ]
       ]
-        |> row [ spacing 20 ]
-        |> btn (Just ToggleStats) [ centerX ]
+        |> row [ spacing 20, centerX ]
     , [ text "Proof of Work"
             |> el [ Font.size 17, width <| px 140 ]
       , text "|"
@@ -35,30 +30,9 @@ view model =
       ]
         |> row [ spacing 10, centerX ]
         |> when False
-    , if startTime < model.currentTime then
-        viewBody model
-
-      else
-        [ [ Img.x 20
-          , text ".com/MineralSupply"
-                |> el [ Font.size 22 ]
-          ]
-            |> row []
-            |> linkOut "https://twitter.com/MineralSupply" []
-        , timeDifference model.currentTime startTime
-            |> (\( hours, mins, seconds ) ->
-                    [ String.padLeft 2 '0' (String.fromInt hours)
-                    , ":"
-                    , String.padLeft 2 '0' (String.fromInt mins)
-                    , ":"
-                    , String.padLeft 2 '0' (String.fromInt seconds)
-                    ]
-                        |> String.concat
-               )
-            |> text
-            |> el [ Font.size 50, centerX ]
-        ]
-            |> column [ centerX, spacing 20 ]
+    , viewBody model
+    , footerLinks
+        |> el [ alignBottom, centerX ]
     ]
         |> column
             [ cappedWidth 450
@@ -82,64 +56,6 @@ view model =
             , mainFont
             , Font.color white
             , Background.color black
-            , model.stats
-                |> whenJust
-                    (\data ->
-                        [ text "STATS"
-                            |> el
-                                [ Font.bold
-                                , centerX
-                                , displayFont
-                                , Font.size 30
-                                ]
-                        , data
-                            |> whenJust
-                                (\stats ->
-                                    [ [ text "Total Hashes:"
-                                            |> el [ Font.bold ]
-                                      , formatFloatN 0 (toFloat stats.totalHashes)
-                                            |> text
-                                      ]
-                                        |> row [ spacing 10 ]
-                                    , [ text "Total Rewards:"
-                                            |> el [ Font.bold ]
-                                      , formatMINE stats.totalRewards 2
-                                            |> text
-                                      , text "$MINE"
-                                      ]
-                                        |> row [ spacing 10 ]
-                                    , [ text "Reward rate:"
-                                            |> el [ Font.bold ]
-                                      , formatMINE stats.rewardRate 9
-                                            |> text
-                                      ]
-                                        |> row [ spacing 10 ]
-                                    ]
-                                        |> column
-                                            [ spacing 10
-                                            , Font.size 17
-                                            ]
-                                )
-                        ]
-                            |> column
-                                [ width fill
-                                , height <| minimum 200 <| fill
-                                , Border.width 2
-                                , Border.color white
-                                , Background.color black
-                                , spacing 20
-                                , padding 10
-                                , img [ width <| px 25 ] "/icons/x.png"
-                                    |> btn (Just ToggleStats)
-                                        [ alignRight
-                                        , alignTop
-                                        , padding 10
-                                        ]
-                                    |> inFront
-                                ]
-                            |> el [ paddingXY 0 20, cappedWidth 350, centerX ]
-                    )
-                |> inFront
             ]
 
 
@@ -194,7 +110,9 @@ viewBody model =
                     balanceEmpty =
                         wallet.balances
                             |> unwrap True
-                                (.sui >> (==) 0)
+                                (\bals ->
+                                    bals.sui < Utils.minimumGasBalance
+                                )
                 in
                 if model.exportWarning then
                     [ [ [ [ img [ height <| px 25 ] "/icons/wallet_alt.png"
@@ -284,7 +202,7 @@ viewBody model =
                                     ++ "..."
                                     ++ String.right 8 wallet.address
                                 )
-                                |> linkOut ("https://suiscan.xyz/testnet/account/" ++ wallet.address) [ Font.underline ]
+                                |> linkOut ("https://suiscan.xyz/mainnet/account/" ++ wallet.address) [ Font.underline ]
                           , img [ height <| px 25 ] "/icons/copy.png"
                                 |> btn (Just (Copy wallet.address))
                                     [ title wallet.address
@@ -298,6 +216,14 @@ viewBody model =
                                 , padding 10
                                 , Border.width 2
                                 ]
+                      , [ navBtn model.view "Mine" ViewMine
+                        , navBtn model.view "Stats" ViewStats
+
+                        --, navBtn model.view "Transfer" ViewClaim
+                        , navBtn model.view "Settings" ViewSettings
+                        ]
+                            |> row [ centerX, spacing 20 ]
+                            |> when (not balanceEmpty)
                       , wallet.balances
                             |> whenJust
                                 (\bal ->
@@ -329,15 +255,9 @@ viewBody model =
                                 )
                       ]
                         |> column
-                            [ spacing 20
+                            [ spacing 10
                             , width fill
                             ]
-                    , [ navBtn model.view "Mine" ViewMine
-                      , navBtn model.view "Claim" ViewClaim
-                      ]
-                        |> row [ centerX, spacing 20 ]
-                        |> when (not balanceEmpty)
-                        |> when False
                     ]
                         |> column
                             [ width fill
@@ -395,9 +315,227 @@ viewDash model wallet bal =
                     ]
                 |> when False
     in
-    if model.view == ViewClaim then
-        [ claimable
-        , Input.text
+    case model.view of
+        ViewStats ->
+            [ model.stats
+                |> whenJust
+                    (\data ->
+                        data
+                            |> whenJust
+                                (\stats ->
+                                    [ [ text "Total Hashes:"
+                                            |> el [ Font.bold ]
+                                      , formatFloatN 0 (toFloat stats.totalHashes)
+                                            |> text
+                                      ]
+                                        |> row [ spacing 10 ]
+                                    , [ text "Total Rewards:"
+                                            |> el [ Font.bold ]
+                                      , formatMINE stats.totalRewards 2
+                                            |> text
+                                      , text "$MINE"
+                                      ]
+                                        |> row [ spacing 10 ]
+                                    , [ text "Current mine reward:"
+                                            |> el [ Font.bold ]
+                                      , formatMINE stats.rewardRate 5
+                                            |> text
+                                      , text "$MINE"
+                                      ]
+                                        |> row [ spacing 10 ]
+                                    ]
+                                        |> column
+                                            [ spacing 10
+                                            , Font.size 17
+                                            ]
+                                        |> el
+                                            [ width fill
+                                            , Border.width 2
+                                            , Border.color white
+                                            , Background.color black
+                                            , padding 10
+                                            ]
+                                )
+                    )
+            , model.swapData
+                |> whenJust
+                    (\rtns ->
+                        let
+                            shouldSwap =
+                                rtns.delta < 0
+                        in
+                        [ [ text "Mine gas cost:"
+                                |> el [ Font.bold ]
+                          , formatFloatN 5 rtns.mineGasFee
+                                |> text
+                          , text "$SUI"
+                          ]
+                            |> row [ spacing 10 ]
+                        , [ text "Swap return:"
+                                |> el [ Font.bold ]
+                          , formatFloatN 5 rtns.swapOutput
+                                |> text
+                                |> linkOut turbosLink [ Font.underline ]
+                          , text "$MINE"
+                          ]
+                            |> row [ spacing 10 ]
+                        , [ [ text
+                                (if shouldSwap then
+                                    "Swap vs Mine:"
+
+                                 else
+                                    "Mine vs Swap:"
+                                )
+                                |> el [ Font.bold ]
+                            , "+"
+                                ++ formatFloatN 5 (abs rtns.delta)
+                                |> text
+                                |> el
+                                    [ Font.color green
+                                    ]
+                            , text "$SUI"
+                            ]
+                                |> row [ spacing 10 ]
+                          , (if shouldSwap then
+                                "Swapping is recommended."
+
+                             else
+                                "Mining is recommended."
+                            )
+                                |> text
+                                |> el [ Font.size 15, centerX ]
+                          ]
+                            |> column [ spacing 10, width fill ]
+                        ]
+                            |> column
+                                [ width fill
+                                , Border.width 2
+                                , Border.color white
+                                , Background.color black
+                                , spacing 10
+                                , padding 10
+                                , Font.size 17
+                                ]
+                    )
+            , spinner 30
+                |> el [ centerX ]
+                |> when ((model.stats |> unwrap False isNothing) && isNothing model.swapData)
+            , [ "Swap on Hop Aggregator"
+                    |> text
+                    |> linkOut "https://hop.ag/swap/SUI-MINE" [ centerX, Font.underline ]
+              , "Swap on Turbos"
+                    |> text
+                    |> linkOut turbosLink [ centerX, Font.underline ]
+              ]
+                |> column [ spacing 10, centerX, Font.size 17 ]
+            ]
+                |> column [ spacing 20, width fill ]
+
+        ViewSettings ->
+            [ text "RPC"
+                |> el
+                    [ Font.bold
+                    , centerX
+                    , displayFont
+                    , Font.size 30
+                    ]
+            , model.rpcs
+                |> (\( rpc, rpcs ) ->
+                        rpcs
+                            |> List.map
+                                (\rpc_ ->
+                                    [ el [ Font.size 20, Font.bold ] (text "X")
+                                        |> when (rpc_ == rpc)
+                                        |> el [ width <| px 20 ]
+                                    , ellipsisText 17 rpc_
+                                        |> el [ width fill ]
+                                    ]
+                                        |> row []
+                                )
+                   )
+                |> column [ spacing 10 ]
+            ]
+                |> column
+                    [ width fill
+                    , height <| minimum 200 <| fill
+                    , Border.width 2
+                    , Border.color white
+                    , Background.color black
+                    , spacing 20
+                    , padding 10
+                    ]
+                |> el [ cappedWidth 350, centerX ]
+
+        ViewClaim ->
+            viewManager model wallet
+
+        ViewMine ->
+            [ [ [ text "Balances"
+                    |> el [ Font.bold ]
+                , text "Manage"
+                    |> btn
+                        (if model.tokenRefreshInProgress then
+                            Nothing
+
+                         else
+                            Just (SetView ViewClaim)
+                        )
+                        [ Font.underline, Font.size 15 ]
+                ]
+                    |> row [ spaceEvenly, width fill ]
+              , [ text
+                    ("Sui: "
+                        ++ formatFloatN 4 (toFloat bal.sui / 1000000000)
+                        ++ " SUI"
+                    )
+                , text
+                    ("Mineral: "
+                        ++ formatFloatN 9 (toFloat bal.mineral / 1000000000)
+                        ++ " $MINE"
+                    )
+                ]
+                    |> column
+                        [ spacing 10
+                        , width fill
+                        ]
+              ]
+                |> column
+                    [ spacing 10
+                    , width fill
+                    , padding 10
+                    , Border.width 2
+                    ]
+            , claimable
+            , viewMine model wallet
+            ]
+                |> column
+                    [ spacing 20
+                    , width fill
+                    ]
+
+
+ellipsisText : Int -> String -> Element msg
+ellipsisText n txt =
+    Html.div
+        [ Html.Attributes.style "overflow" "hidden"
+        , Html.Attributes.style "text-overflow" "ellipsis"
+        , Html.Attributes.style "white-space" "nowrap"
+        , Html.Attributes.style "height" <| String.fromInt n ++ "px"
+        , Html.Attributes.style "display" "table-cell"
+        , Html.Attributes.title txt
+        ]
+        [ Html.text txt
+        ]
+        |> Element.html
+        |> el
+            [ width fill
+            , style "table-layout" "fixed"
+            , style "display" "table"
+            ]
+
+
+viewManager model wallet =
+    [ [ Input.text
             [ width fill
             , Font.color black
             , Border.rounded 0
@@ -407,7 +545,7 @@ viewDash model wallet bal =
             , text = model.addressInput
             , label = Input.labelHidden ""
             }
-        , Input.text
+      , Input.text
             [ width fill
             , Font.color black
             , Border.rounded 0
@@ -420,87 +558,65 @@ viewDash model wallet bal =
                     |> txtBtn (Just ToggleMax)
                     |> Input.labelRight []
             }
-        , let
-            inProg =
-                model.claimStatus == InProgress
-          in
-          [ text "Claim"
-                |> txtBtn (fork inProg Nothing (Just ClaimMax))
-          , spinner 20
-                |> when inProg
-          ]
-            |> row
-                [ spacing 10
-                , centerX
+      ]
+        |> column []
+        |> when False
+    , wallet.balances
+        |> whenJust
+            (\bal ->
+                [ [ text "$MINE object count:"
+                        |> el [ Font.bold ]
+                  , String.fromInt bal.mineralObjects
+                        |> text
+                  ]
+                    |> row [ spacing 20 ]
+                , [ text "Merge Objects"
+                        |> txtBtn (Just ManageCoins)
+                        |> el [ alignRight ]
+                  , para [ Font.size 12 ] "Combine multiple coin objects and reclaim $SUI rent"
+                  ]
+                    |> row [ spacing 10 ]
+                    |> when (bal.mineralObjects > 1)
                 ]
-        , case model.claimStatus of
-            Response (Ok val) ->
-                text "Success"
-                    |> linkOut ("https://testnet.suivision.xyz/txblock/" ++ val) [ Font.underline ]
-
-            Response (Err val) ->
-                para
-                    [ Html.Attributes.style "word-break" "break-all"
-                        |> htmlAttribute
-                    ]
-                    ("Error: " ++ val)
-
-            _ ->
-                none
-        , horizRule
-        , text "RETURN TO MINES"
-            |> txtBtn (Just (SetView ViewMine))
-            |> el [ centerX ]
-        ]
-            |> column [ spacing 20, width fill ]
-
-    else
-        [ [ [ text "Balances"
-                |> el [ Font.bold ]
-            , text "Refresh"
-                |> btn
-                    (if model.tokenRefreshInProgress then
-                        Nothing
-
-                     else
-                        Just RefreshTokens
-                    )
-                    [ Font.underline, Font.size 15 ]
-                |> when False
+                    |> column [ spacing 20 ]
+            )
+    , let
+        inProg =
+            model.claimStatus == InProgress
+      in
+      [ text "Claim"
+            |> txtBtn (fork inProg Nothing (Just ClaimMax))
+      , spinner 20
+            |> when inProg
+      ]
+        |> row
+            [ spacing 10
+            , centerX
             ]
-                |> row [ spaceEvenly, width fill ]
-          , [ text
-                ("Sui: "
-                    ++ formatFloatN 4 (toFloat bal.sui / 1000000000)
-                    ++ " SUI"
-                )
-            , text
-                ("Mineral: "
-                    ++ formatFloatN 9 (toFloat bal.mineral / 1000000000)
-                    ++ " $MINE"
-                )
-            ]
-                |> column
-                    [ spacing 10
-                    , width fill
-                    ]
-          ]
-            |> column
-                [ spacing 10
-                , width fill
-                , padding 10
-                , Border.width 2
+        |> when False
+    , case model.claimStatus of
+        Response (Ok val) ->
+            text "Success"
+                |> linkOut ("https://suivision.xyz/txblock/" ++ val) [ Font.underline ]
+
+        Response (Err val) ->
+            para
+                [ Html.Attributes.style "word-break" "break-all"
+                    |> htmlAttribute
                 ]
-        , claimable
-        , viewMine model wallet
-        ]
-            |> column
-                [ spacing 20
-                , width fill
-                ]
+                ("Error: " ++ val)
+
+        _ ->
+            none
+    , horizRule
+    , text "RETURN TO MINE"
+        |> txtBtn (Just (SetView ViewMine))
+        |> el [ centerX ]
+    ]
+        |> column [ spacing 20, width fill ]
 
 
-viewMine model wallet =
+viewMine model _ =
     [ model.miningStatus
         |> unwrap
             ([ [ img [ height <| px 25 ] "/icons/mine.png"
@@ -522,46 +638,49 @@ viewMine model wallet =
             )
             (\status ->
                 let
-                    stage =
-                        if model.persistSuccessMessage then
-                            3
-
-                        else
-                            case status of
-                                "1" ->
-                                    0
-
-                                "2" ->
-                                    1
-
-                                "3" ->
-                                    2
-
-                                _ ->
-                                    3
-
                     txt =
-                        case stage of
-                            0 ->
+                        case status of
+                            SearchingForProof ->
                                 "🔍 Searching for a valid proof"
 
-                            1 ->
+                            ValidProofFound ->
                                 "✅ Valid proof calculated"
 
-                            2 ->
-                                "📡 Submitting claim"
+                            SubmittingProof ->
+                                "📡 Submitting proof"
 
-                            _ ->
+                            WaitingForReset ->
+                                "⏳ Waiting for next epoch"
+
+                            MiningSuccess ->
                                 "🏅 Mining success!"
                 in
-                [ List.range 0 3
+                [ let
+                    progressStage =
+                        case status of
+                            SearchingForProof ->
+                                0
+
+                            ValidProofFound ->
+                                1
+
+                            SubmittingProof ->
+                                2
+
+                            WaitingForReset ->
+                                2
+
+                            MiningSuccess ->
+                                3
+                  in
+                  List.range 0 3
                     |> List.map
                         (\n ->
                             el
                                 [ height <| px 20
                                 , width fill
                                 , Background.color green
-                                    |> whenAttr (n <= stage)
+                                    |> whenAttr (n <= progressStage)
                                 , Border.width 3
                                 , Border.color green
                                 ]
@@ -580,6 +699,7 @@ viewMine model wallet =
                         |> text
                   ]
                     |> row [ centerX, spacing 10 ]
+                    |> when (status == SearchingForProof)
                 , [ spinningCog 25
                   , text "STOP"
                         |> txtBtn (Just StopMining)
@@ -606,7 +726,7 @@ displayFont =
 
 btn msg attrs elem =
     Input.button
-        ([ hover |> whenAttr (msg /= Nothing) ] ++ attrs)
+        ((hover |> whenAttr (msg /= Nothing)) :: attrs)
         { onPress = msg
         , label = elem
         }
@@ -683,6 +803,11 @@ green =
     rgb255 0 255 0
 
 
+red : Color
+red =
+    rgb255 255 0 0
+
+
 white =
     --rgb255 255 255 255
     rgb255 215 215 215
@@ -731,29 +856,20 @@ horizRule =
     el [ width fill, height <| px 2, Background.color white ] none
 
 
-timeDifference : Int -> Int -> ( Int, Int, Int )
-timeDifference timestamp1 timestamp2 =
-    let
-        diffMillis =
-            abs (timestamp1 - timestamp2)
-
-        totalSeconds =
-            diffMillis // 1000
-
-        hours =
-            totalSeconds // 3600
-
-        remainingSecondsAfterHours =
-            modBy 3600 totalSeconds
-
-        minutes =
-            remainingSecondsAfterHours // 60
-
-        seconds =
-            modBy 60 remainingSecondsAfterHours
-    in
-    ( hours, minutes, seconds )
-
-
 formatMINE n d =
     formatFloatN d (toFloat n / 1000000000)
+
+
+turbosLink =
+    "https://app.turbos.finance/#/trade?input=0x2::sui::SUI&output=0x9cde6fd22c9518820644dd1350ac1595bb23751033d247465ff3c7572d9a7049::mine::MINE"
+
+
+footerLinks =
+    [ img [ height <| px 30 ] "/icons/github.png"
+        |> linkOut "https://github.com/ronanyeah/mineral" []
+    , img [ height <| px 30 ] "/icons/discord.png"
+        |> linkOut "https://discord.com/invite/CYTsaBgEJ2" []
+    , img [ height <| px 30 ] "/icons/twitter.png"
+        |> linkOut "https://x.com/mineralSupply" []
+    ]
+        |> row [ spacing 40 ]

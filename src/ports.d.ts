@@ -14,29 +14,25 @@ interface Ports {
     amount: number;
     recipient: string;
   }>;
-  submitProof: PortOut<{
-    proof: Proof;
-    miner: string;
-  }>;
+  submitProof: PortOut<ProofData>;
   mine: PortOut<string>;
   refreshTokens: PortOut<null>;
   fetchStats: PortOut<null>;
   stopMining: PortOut<null>;
   clearWallet: PortOut<null>;
-  minerAccountCb: PortIn<Miner>;
+  combineCoins: PortOut<null>;
   minerCreatedCb: PortIn<Miner>;
-  statusCb: PortIn<string>;
+  statusCb: PortIn<number>;
   miningError: PortIn<string>;
+  proofSubmitError: PortIn<string>;
   balancesCb: PortIn<Balances | null>;
-  walletCb: PortIn<Keypair>;
+  walletCb: PortIn<Wallet>;
   claimCb: PortIn<any>;
   proofCb: PortIn<Proof>;
   hashCountCb: PortIn<number>;
   statsCb: PortIn<Stats>;
-  retrySubmitProof: PortIn<{
-    proof: Proof;
-    miner: string;
-  }>;
+  swapDataCb: PortIn<SwapData>;
+  retrySubmitProof: PortIn<ProofData>;
 }
 
 interface PortOut<T> {
@@ -47,9 +43,18 @@ interface PortIn<T> {
   send: (_: T) => void;
 }
 
+interface Wallet {
+  address: string;
+  privateKey: string;
+  balances: Balances | null;
+  miningAccount: Miner | null;
+}
+
 interface Balances {
   mineral: number;
   sui: number;
+  mineralObjects: number;
+  coinObject: string | null;
 }
 
 interface Miner {
@@ -73,4 +78,16 @@ interface Stats {
   rewardRate: number;
 }
 
-export { ElmApp, Balances, Miner, Keypair, Proof, Stats };
+interface SwapData {
+  mineGasFee: number;
+  swapOutput: number;
+  delta: number;
+}
+
+interface ProofData {
+  proof: Proof;
+  miner: string;
+  coinObject: string | null;
+}
+
+export { ElmApp, Wallet, Balances, Miner, Keypair, Proof, Stats, SwapData, ProofData };

@@ -3,7 +3,6 @@ module Main exposing (main)
 import Browser
 import Json.Decode as JD
 import Ports
-import Time
 import Types exposing (..)
 import Update exposing (update)
 import View exposing (view)
@@ -23,7 +22,6 @@ init : Flags -> ( Model, Cmd Msg )
 init flags =
     ( { balance = 0
       , exportWarning = False
-      , persistSuccessMessage = False
       , addressInput = ""
       , miningStatus = Nothing
       , hashesChecked = 0
@@ -33,12 +31,12 @@ init flags =
       , view = ViewMine
       , claimStatus = Standby
       , showSecret = False
-      , proof = Nothing
       , confirmDelete = False
-      , currentTime = flags.time
       , tokenRefreshInProgress = False
       , miningError = Nothing
       , stats = Nothing
+      , swapData = Nothing
+      , rpcs = flags.rpc
       , wallet =
             flags.wallet
                 |> Maybe.map
@@ -60,13 +58,14 @@ subscriptions _ =
         [ Ports.balancesCb BalancesCb
         , Ports.walletCb WalletCb
         , Ports.statusCb StatusCb
-        , Ports.minerAccountCb MinerCb
         , Ports.minerCreatedCb MinerCreatedCb
         , Ports.proofCb ProofCb
         , Ports.retrySubmitProof RetrySubmitProof
         , Ports.miningError MiningError
+        , Ports.proofSubmitError ProofSubmitError
         , Ports.hashCountCb HashCountCb
         , Ports.statsCb StatsCb
+        , Ports.swapDataCb SwapDataCb
         , Ports.claimCb
             (decodeResult JD.string
                 >> ClaimRes

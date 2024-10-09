@@ -7,7 +7,7 @@ type alias Model =
     { balance : Int
     , wallet : Maybe Wallet
     , walletInput : String
-    , miningStatus : Maybe String
+    , miningStatus : Maybe MiningStatus
     , view : View
     , claimInput : String
     , withdrawMax : Bool
@@ -16,25 +16,23 @@ type alias Model =
     , showSecret : Bool
     , confirmDelete : Bool
     , tokenRefreshInProgress : Bool
-    , persistSuccessMessage : Bool
     , addressInput : String
-    , proof : Maybe Proof
-    , currentTime : Int
     , miningError : Maybe String
     , hashesChecked : Int
     , stats : Maybe (Maybe Ports.Stats)
+    , swapData : Maybe Ports.SwapData
+    , rpcs : ( String, List String )
     }
 
 
 type Msg
     = BalancesCb (Maybe Balances)
-    | WalletCb Keypair
-    | MinerCb Miner
+    | WalletCb Wallet
     | MinerCreatedCb Miner
     | Mine
     | CreateWallet
     | Copy String
-    | StatusCb String
+    | StatusCb Int
     | WalletInputCh String
     | ConfirmWallet
     | StopMining
@@ -42,6 +40,7 @@ type Msg
     | AddressInputCh String
     | ClaimInputCh String
     | HashCountCb Int
+    | ProofSubmitError String
     | ToggleMax
     | ClaimMax
     | ClaimRes (Result String String)
@@ -51,22 +50,25 @@ type Msg
     | RefreshTokens
     | UnsetMessage
     | ProofCb Proof
-    | RetrySubmitProof { proof : Proof, miner : String }
+    | RetrySubmitProof ProofData
     | MiningError String
     | StatsCb Ports.Stats
-    | Tick Int
-    | ToggleStats
+    | SwapDataCb Ports.SwapData
+    | ManageCoins
 
 
 type alias Flags =
     { wallet : Maybe Keypair
     , time : Int
+    , rpc : ( String, List String )
     }
 
 
 type View
     = ViewMine
     | ViewClaim
+    | ViewSettings
+    | ViewStats
 
 
 type ClaimStatus
@@ -75,12 +77,16 @@ type ClaimStatus
     | Response (Result String String)
 
 
+type MiningStatus
+    = SearchingForProof
+    | ValidProofFound
+    | SubmittingProof
+    | MiningSuccess
+    | WaitingForReset
+
+
 type alias Wallet =
-    { address : String
-    , privateKey : String
-    , balances : Maybe Balances
-    , miningAccount : Maybe Miner
-    }
+    Ports.Wallet
 
 
 type alias Balances =
@@ -97,3 +103,7 @@ type alias Keypair =
 
 type alias Proof =
     Ports.Proof
+
+
+type alias ProofData =
+    Ports.ProofData

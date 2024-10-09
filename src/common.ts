@@ -1,52 +1,25 @@
 /* eslint-disable fp/no-loops, fp/no-mutation, fp/no-mutating-methods, fp/no-let, no-constant-condition */
 
 import { keccak_256 } from "@noble/hashes/sha3";
-import { mine, epochReset } from "./codegen/mineral/mine/functions";
-import { register } from "./codegen/mineral/miner/functions";
-import { SUI_CLOCK_OBJECT_ID } from "@mysten/sui.js/utils";
-import { bcs } from "@mysten/sui.js/bcs";
-import * as constants from "./constants";
+import { SignatureWithBytes } from "@mysten/sui/cryptography";
+import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
+import { SUI_CLOCK_OBJECT_ID, MIST_PER_SUI } from "@mysten/sui/utils";
+import { Transaction } from "@mysten/sui/transactions";
 import {
+  TransactionEffects,
   ExecutionStatus,
   SuiClient,
   SuiTransactionBlockResponse,
-  SuiTransactionBlockResponseOptions,
-} from "@mysten/sui.js/client";
-import { TransactionBlock } from "@mysten/sui.js/transactions";
-import { Ed25519Keypair } from "@mysten/sui.js/dist/cjs/keypairs/ed25519";
+} from "@mysten/sui/client";
+import { TurbosSdk } from "turbos-clmm-sdk";
+
+import { ProofData } from "./ports";
+import * as constants from "./constants";
+
+import { mine } from "./codegen/mineral/mine/functions";
+import { register } from "./codegen/mineral/miner/functions";
 import { Bus } from "./codegen/mineral/mine/structs";
 import { Miner } from "./codegen/mineral/miner/structs";
-import numbro from "numbro";
-import { SignatureWithBytes } from "@mysten/sui.js/dist/cjs/cryptography";
-
-export const CONFIG =
-  "0x0fc44c38dd791dffb696ca7448cb8b1774c17178d3dd3b0fed3480f2ac82bd5b";
-export const BUSES = [
-  "0x2bbc816d1139263190f738783789e23b69eb84f1293d0417432ed8c00556ed7c",
-  "0x4ac2335213b48837a6036c37078af04921bac8844c982728cbcfcdc9304dce2a",
-  "0x5ff0cae9a422a59fc3a9685c9d0e9e3cc58a9bc0c3eec212cd879f92e814aa4b",
-  "0x6cf20bbe1f40431fcbe26dc18952f9bf025fbbeb38c9ce00ae4cc807bfa0bbd2",
-  "0x72828b43f588eeb7721b50e9d8bc47a8ab2d1a9e93698109ef9afc93f364f8b6",
-  "0x77092b2f9370e6a60e2e24817ad7b3dfdff7e18ee959e1d01ed5ecd8687c5e34",
-  "0xacb27d661ae5eb463933c373ecdafe84023141d95e335353b02b4a3de2251a52",
-  "0xb826932f675bb1215c5285b2ad3e137a6b2f91122003b6f68b6fe52cc8cd8b3b",
-];
-
-export type MineEvent =
-  | "resetting"
-  | "retrying"
-  | "simulating"
-  | "submitting"
-  | "waiting";
-
-// Use typescript-eslint or varsIgnorePattern
-/* eslint-disable no-unused-vars */
-enum BusStatus {
-  MineOk,
-  RewardsExhausted,
-  ResetNeeded,
-}
-/* eslint-enable no-unused-vars */
 
 export const getClient = () => {
   return new SuiClient({
@@ -54,19 +27,58 @@ export const getClient = () => {
   });
 };
 
+export async function calcSwapVsMine(sdk: TurbosSdk, mineReward: bigint) {
+  const MINE_GAS_FEE = 811_644;
+
+  const [swap] = await sdk.trade.computeSwapResultV2({
+    pools: [
+      {
+        pool: "0x36f838ab69ea41d959de58dd5b2cb00c9deb7bc1e851a82097b66dfd629f0f3f",
+        a2b: true,
+        amountSpecified: mineReward.toString(),
+      },
+    ],
+    address:
+      "0x7da95f2a3898d8aabbb9b67fb0130c029c73085340db8b21373c514c608e65fe",
+    amountSpecifiedIsInput: true,
+  });
+  const out =
+    Number(swap.amount_b) + Number(swap.protocol_fee) + Number(swap.fee_amount);
+  const delta = (out - MINE_GAS_FEE) / Number(MIST_PER_SUI);
+  return {
+    mineGasFee: MINE_GAS_FEE / Number(MIST_PER_SUI),
+    swapOutput: out / Number(MIST_PER_SUI),
+    delta,
+  };
+}
+
 export function fetchBus(client: SuiClient) {
-  return Bus.fetch(client, BUSES[0]);
+  return Bus.fetch(
+    client,
+    constants.BUSES[Math.floor(Math.random() * constants.BUSES.length)]
+  );
 }
 
-function roll20(): boolean {
-  return Math.floor(Math.random() * 20) === 0;
+export async function findValidBus(client: SuiClient): Promise<Bus | null> {
+  const buses = await fetchBuses(client);
+
+  const bus = buses[0];
+
+  if (bus.rewards.value >= bus.rewardRate) {
+    const threshold = Number(bus.lastReset) + constants.EPOCH_LENGTH;
+
+    const buffer = 8_000;
+    const closeToReset = Date.now() >= threshold - buffer;
+
+    return closeToReset ? null : bus;
+  } else {
+    return null;
+  }
 }
 
-export async function findBus(
-  client: SuiClient
-): Promise<{ bus: Bus; status: BusStatus }> {
+export async function fetchBuses(client: SuiClient): Promise<Bus[]> {
   const objs = await client.multiGetObjects({
-    ids: BUSES,
+    ids: constants.BUSES,
     options: { showContent: true },
   });
   const buses = objs.map((obj) => {
@@ -78,96 +90,117 @@ export async function findBus(
   buses.sort((a, b) => Number(a.rewards.value - b.rewards.value));
   buses.reverse();
 
-  const busWithRewards = buses.find(
-    (bus) => bus.rewards.value >= bus.rewardRate
-  );
-  if (busWithRewards) {
-    return {
-      bus: busWithRewards,
-      status: canBeReset(busWithRewards.lastReset)
-        ? BusStatus.ResetNeeded
-        : BusStatus.MineOk,
-    };
-  } else {
-    const bus = buses[0];
-    return {
-      bus,
-      status: canBeReset(bus.lastReset)
-        ? BusStatus.ResetNeeded
-        : BusStatus.RewardsExhausted,
-    };
-  }
+  return buses;
 }
 
-export async function ship(
-  preSign: SignatureWithBytes,
+export async function estimateGasAndSubmit(
+  txb: Transaction,
   client: SuiClient,
-  opts?: SuiTransactionBlockResponseOptions
+  wallet: Ed25519Keypair
 ): Promise<SuiTransactionBlockResponse> {
+  const drySign = await signTx(txb, client, wallet, null);
+
   const dryRun = await client.dryRunTransactionBlock({
-    transactionBlock: preSign.bytes,
+    transactionBlock: drySign.bytes,
   });
 
-  if (dryRun.effects.status.status === "failure") {
-    const contractErr = extractError(dryRun.effects.status);
-    throw Error(contractErr || "Unknown failure");
-  }
+  handleTxError(dryRun.effects);
+
+  const gasUsed =
+    Number(dryRun.effects.gasUsed.computationCost) +
+    Number(dryRun.effects.gasUsed.storageCost) -
+    Number(dryRun.effects.gasUsed.storageRebate);
+
+  const signedTx = await signTx(txb, client, wallet, Math.max(0, gasUsed));
 
   const res = await client.executeTransactionBlock({
-    transactionBlock: preSign.bytes,
-    signature: preSign.signature,
-    options: opts,
+    transactionBlock: signedTx.bytes,
+    signature: signedTx.signature,
+    options: { showEffects: true },
   });
 
-  const _exec = await client.waitForTransactionBlock({
-    digest: res.digest,
-  });
+  if (!res.effects) {
+    throw Error("Tx effects missing");
+  }
+
+  handleTxError(res.effects);
 
   return res;
 }
 
-export function buildTx(
-  txb: TransactionBlock,
+export function signTx(
+  txb: Transaction,
   client: SuiClient,
-  wallet: Ed25519Keypair
+  wallet: Ed25519Keypair,
+  gas: number | null
 ): Promise<SignatureWithBytes> {
   txb.setSender(wallet.toSuiAddress());
-  txb.setGasBudget(5000000);
+  if (gas) {
+    txb.setGasBudget(gas);
+  }
   return txb.sign({
     client,
     signer: wallet,
   });
 }
 
-export async function launch(
-  txb: TransactionBlock,
-  client: SuiClient,
-  wallet: Ed25519Keypair
-): Promise<SuiTransactionBlockResponse> {
-  const preSign = await buildTx(txb, client, wallet);
-  return ship(preSign, client);
+export function handleTxError(effects: TransactionEffects) {
+  if (effects.status.status === "failure") {
+    throw Error(
+      effects.status.error || `Unknown failure: ${effects.transactionDigest}`
+    );
+  }
 }
 
-export async function buildMineTx(
-  nonce: bigint,
-  minerId: string,
+export function handleMineralError(effects: TransactionEffects) {
+  if (effects.status.status === "failure") {
+    const contractErr = extractError(effects.status);
+    throw Error(
+      contractErr ||
+        effects.status.error ||
+        `Unknown failure: ${effects.transactionDigest}`
+    );
+  }
+}
+
+export async function launch(
+  txb: Transaction,
   client: SuiClient,
-  bus: Bus,
+  wallet: Ed25519Keypair,
+  gas: number
+): Promise<SuiTransactionBlockResponse> {
+  const signedTx = await signTx(txb, client, wallet, gas);
+
+  const res = await client.executeTransactionBlock({
+    transactionBlock: signedTx.bytes,
+    signature: signedTx.signature,
+    options: { showEffects: true },
+  });
+
+  return res;
+}
+
+export function buildMineTx(
+  proofData: ProofData,
+  busId: string,
   payer: string
-): Promise<TransactionBlock> {
-  const txb = new TransactionBlock();
-  const shared = await getSharedVersion(bus.id, client);
+): Transaction {
+  const txb = new Transaction();
   const [createdObj] = mine(txb, {
-    nonce,
+    nonce: BigInt(proofData.proof.nonce),
     bus: txb.sharedObjectRef({
-      objectId: bus.id,
+      objectId: busId,
       mutable: true,
-      initialSharedVersion: shared,
+      initialSharedVersion: 0,
     }),
     clock: SUI_CLOCK_OBJECT_ID,
-    miner: minerId,
+    miner: proofData.miner,
   });
-  txb.transferObjects([createdObj], payer);
+  if (proofData.coinObject) {
+    txb.mergeCoins(proofData.coinObject, [createdObj]);
+  } else {
+    txb.transferObjects([createdObj], payer);
+  }
   return txb;
 }
 
@@ -202,169 +235,22 @@ export function int64to8(n: bigint) {
 export async function getProof(
   client: SuiClient,
   address: string
-): Promise<string | null> {
+): Promise<Miner | null> {
   const res = await client.getOwnedObjects({
     owner: address,
     filter: { StructType: Miner.$typeName },
+    options: { showContent: true },
   });
   const [miner] = res.data;
-  return miner && miner.data ? miner.data.objectId : null;
-}
-
-export async function runner(
-  client: SuiClient,
-  difficulty: number,
-  wallet: Ed25519Keypair,
-  minerId: string,
-  logger?: (_val: string) => void
-) {
-  const log = (val: string) => (logger ? logger(val) : null);
-  const tag = wallet.toSuiAddress().slice(0, 8);
-
-  const signerBytes = bcs.Address.serialize(wallet.toSuiAddress()).toBytes();
-
-  let currentHash: Uint8Array | null = null;
-  let nonce = BigInt(0);
-  log("⛏️  Mining started");
-  log("🔍 Looking for a valid proof...");
-  while (true) {
-    await (async () => {
-      if (!currentHash) {
-        const miner = await Miner.fetch(client, minerId);
-        currentHash = new Uint8Array(miner.currentHash);
-      }
-
-      const hash = createHash(currentHash, signerBytes, nonce);
-      const hashIsValid = validateHash(hash, difficulty);
-      if (hashIsValid) {
-        const handleEvent = (ev: MineEvent) => {
-          switch (ev) {
-            case "resetting": {
-              break;
-            }
-            case "retrying": {
-              break;
-            }
-            case "submitting": {
-              log("✅ Valid hash found");
-              log("📡 Submitting transaction");
-              break;
-            }
-            case "simulating": {
-              break;
-            }
-          }
-        };
-        const res = await submitProof(
-          wallet,
-          nonce,
-          client,
-          minerId,
-          handleEvent
-        );
-
-        if (!res) {
-          return;
-        }
-
-        log("🏅 Mining success!");
-        log("🔍 Looking for next hash...");
-        currentHash = null;
-        nonce = BigInt(0);
-      } else {
-        nonce++;
-      }
-    })().catch((e) => {
-      console.error(tag, e);
-      return new Promise((r) => setTimeout(() => r(true), 500));
-    });
-  }
-}
-
-export async function waitUntilReset(client: SuiClient) {
-  const bus = await fetchBus(client);
-
-  const threshold = Number(bus.lastReset) + constants.EPOCH_LENGTH;
-
-  if (Date.now() < threshold) {
-    await new Promise((r) => setTimeout(() => r(true), threshold - Date.now()));
-  }
-}
-
-export async function waitUntilReady(client: SuiClient) {
-  while (true) {
-    const bus = await fetchBus(client);
-
-    if (canBeReset(bus.lastReset)) {
-      await new Promise((r) => setTimeout(() => r(true), 2000));
-    } else {
-      break;
-    }
-  }
-}
-
-export function canBeReset(ts: bigint) {
-  const threshold = Number(ts) + constants.EPOCH_LENGTH;
-
-  return Date.now() >= threshold - 2_000;
-}
-
-export async function execReset(
-  client: SuiClient,
-  wallet: Ed25519Keypair
-): Promise<SuiTransactionBlockResponse | null> {
-  const bus = await fetchBus(client);
-
-  const shared = await getSharedVersion(bus.id, client);
-  const threshold = Number(bus.lastReset) + constants.EPOCH_LENGTH;
-
-  const now = Date.now();
-  if (now >= threshold) {
-    const txb = new TransactionBlock();
-    epochReset(txb, {
-      config: CONFIG,
-      buses: BUSES.map((x) =>
-        txb.sharedObjectRef({
-          objectId: x,
-          mutable: true,
-          initialSharedVersion: shared,
-        })
-      ),
-      clock: SUI_CLOCK_OBJECT_ID,
-    });
-
-    const preSign = await buildTx(txb, client, wallet);
-
-    const dry = await client.dryRunTransactionBlock({
-      transactionBlock: preSign.bytes,
-    });
-
-    if (dry.effects.status.status === "failure") {
-      const errMsg = dry.effects.status.error;
-      if (errMsg) {
-        if (errMsg.includes(constants.EResetTooEarly.toString())) {
-          return null;
-        } else {
-          const contractErr = extractError(dry.effects.status);
-          throw Error(contractErr ? contractErr : errMsg);
-        }
-      } else {
-        throw Error("Unknown failure");
-      }
-    }
-
-    const res = await ship(preSign, client, { showObjectChanges: true });
-
-    return res;
-  }
-
-  return null;
+  return miner && miner.data && miner.data.content
+    ? Miner.fromSuiParsedData(miner.data.content)
+    : null;
 }
 
 export async function getOrCreateMiner(
   wallet: Ed25519Keypair,
   client: SuiClient
-): Promise<string> {
+): Promise<Miner> {
   const pub = wallet.toSuiAddress();
   const proof = await getProof(client, pub);
 
@@ -372,10 +258,10 @@ export async function getOrCreateMiner(
     return proof;
   }
 
-  const txb = new TransactionBlock();
+  const txb = new Transaction();
   register(txb);
 
-  const _res = await launch(txb, client, wallet);
+  const _res = await estimateGasAndSubmit(txb, client, wallet);
 
   const miningAccount = await getProof(client, pub);
 
@@ -396,100 +282,34 @@ export function extractError(status: ExecutionStatus): string | null {
   return match ? match[0] : null;
 }
 
-export async function getSharedVersion(
-  addr: string,
-  client: SuiClient
-): Promise<string> {
-  const configObj = await client.getObject({
-    id: addr,
-    options: { showOwner: true },
-  });
-  const owner = configObj?.data?.owner || null;
-  const shared =
-    // @ts-ignore
-    owner && owner.Shared ? owner.Shared : null;
-  if (!shared) {
-    throw Error("no shared version");
-  }
-  return shared.initial_shared_version;
-}
-
 export async function submitProof(
   wallet: Ed25519Keypair,
-  nonce: bigint,
   client: SuiClient,
-  miner: string,
-  logger?: (_val: MineEvent) => void
-): Promise<SuiTransactionBlockResponse | null> {
-  const log = (val: MineEvent) => (logger ? logger(val) : null);
-  const { bus, status } = await findBus(client);
+  proofData: ProofData,
+  bus: Bus
+): Promise<SuiTransactionBlockResponse> {
+  const txb = buildMineTx(proofData, bus.id, wallet.toSuiAddress());
 
-  switch (status) {
-    case BusStatus.MineOk: {
-      break;
-    }
-    case BusStatus.ResetNeeded: {
-      if (roll20()) {
-        log("resetting");
-        await execReset(client, wallet);
-      } else {
-        await waitUntilReady(client);
-      }
-      return null;
-    }
-    case BusStatus.RewardsExhausted: {
-      log("waiting");
-      await waitUntilReady(client);
-      return null;
-    }
-  }
-
-  const txb = await buildMineTx(
-    nonce,
-    miner,
+  const res = await launch(
+    txb,
     client,
-    bus,
-    wallet.toSuiAddress()
+    wallet,
+    proofData.coinObject ? 1_000_000 : 2_500_000
   );
 
-  const signedTx = await buildTx(txb, client, wallet);
-
-  log("simulating");
-  const dryRun = await client.dryRunTransactionBlock({
-    transactionBlock: signedTx.bytes,
-  });
-
-  // TODO refactor
-  const shouldRetry = await (async () => {
-    if (dryRun.effects.status.status === "failure") {
-      const contractErr = extractError(dryRun.effects.status);
-      const errMsg = dryRun.effects.status.error || "missing";
-
-      if (errMsg.includes(constants.ENeedsReset.toString())) {
-        log("resetting");
-        await execReset(client, wallet);
-        return true;
-      } else if (errMsg.includes(constants.ERewardsExhausted.toString())) {
-        return true;
-      } else if (contractErr) {
-        throw Error(contractErr);
-      } else {
-        throw Error("Unknown error");
-      }
-    } else {
-      return false;
-    }
-  })();
-
-  if (shouldRetry) {
-    log("retrying");
-    return null;
+  if (!res.effects) {
+    throw Error("Tx effects missing");
   }
+  handleMineralError(res.effects);
 
-  log("submitting");
-  const res = await ship(signedTx, client);
+  await waitUntilNextHash(client, proofData.miner, proofData.proof.currentHash);
 
   return res;
+}
+
+export interface MineProgress {
+  nonce: bigint;
+  hash: Uint8Array;
 }
 
 export interface MineConfig {
@@ -505,9 +325,43 @@ export interface MineResult {
   nonce: bigint;
 }
 
-export function formatBig(n: bigint, decimals: number) {
-  return numbro(Number(n) / Math.pow(10, decimals)).format({
-    mantissa: 9,
-    trimMantissa: true,
-  });
+export function snooze(n: number) {
+  return new Promise((r) => setTimeout(() => r(true), n));
+}
+
+export async function waitUntilNextEpoch(client: SuiClient) {
+  const bus = await fetchBus(client);
+  const lastReset = bus.lastReset;
+  const nextReset = Number(bus.lastReset) + constants.EPOCH_LENGTH;
+  const timeUntilNextReset = nextReset - Date.now();
+  if (timeUntilNextReset > 0) {
+    await snooze(timeUntilNextReset);
+  }
+  while (true) {
+    const freshBus = await fetchBus(client);
+    if (freshBus.lastReset !== lastReset) {
+      break;
+    } else {
+      await snooze(1500);
+    }
+  }
+}
+
+export async function waitUntilNextHash(
+  client: SuiClient,
+  miner: string,
+  currentHash: number[]
+) {
+  let current = currentHash.join();
+  let attempts = 0;
+  while (attempts < 5) {
+    const minerObj = await Miner.fetch(client, miner);
+    if (minerObj.currentHash.join() !== current) {
+      return;
+    } else {
+      attempts += 1;
+      await snooze(2000);
+    }
+  }
+  throw Error("Failed to acquire new hash");
 }

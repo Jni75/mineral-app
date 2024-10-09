@@ -1,21 +1,27 @@
 /* eslint-disable fp/no-loops, fp/no-mutation, fp/no-mutating-methods, fp/no-let, no-constant-condition */
 
 import {
-  MineEvent,
+  estimateGasAndSubmit,
+  calcSwapVsMine,
   submitProof,
   MineConfig,
   getProof,
   getOrCreateMiner,
   MineResult,
   fetchBus,
-  CONFIG,
+  findValidBus,
+  waitUntilNextEpoch,
+  MineProgress,
 } from "./common";
-import { Ed25519Keypair } from "@mysten/sui.js/keypairs/ed25519";
-import { bcs } from "@mysten/sui.js/bcs";
+import { CONFIG } from "./constants";
+import { Network, TurbosSdk } from "turbos-clmm-sdk";
+import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
+import { bcs } from "@mysten/sui/bcs";
 import { Stats, ElmApp, Balances } from "./ports";
-import { decodeSuiPrivateKey } from "@mysten/sui.js/cryptography";
-import { SuiClient } from "@mysten/sui.js/client";
-import { SUI_TYPE_ARG } from "@mysten/sui.js/utils";
+import { decodeSuiPrivateKey } from "@mysten/sui/cryptography";
+import { SuiClient } from "@mysten/sui/client";
+import { Transaction } from "@mysten/sui/transactions";
+import { SUI_TYPE_ARG } from "@mysten/sui/utils";
 import { MINE, Config } from "./codegen/mineral/mine/structs";
 import { Miner } from "./codegen/mineral/miner/structs";
 
@@ -25,12 +31,12 @@ const WALLET_KEY = "WALLET";
 const MINE_KEY = "MINOOOR";
 
 const RPCS = [
+  //"https://sui-mainnet-rpc.allthatnode.com",
+  //"https://sui-mainnet-endpoint.blockvision.org",
   "https://fullnode.mainnet.sui.io:443",
   "https://mainnet.suiet.app",
   "https://sui-mainnet-us-1.cosmostation.io",
-  "https://sui-mainnet-endpoint.blockvision.org",
   "https://sui-mainnet.public.blastapi.io",
-  "https://sui-mainnet-rpc.allthatnode.com",
   "https://sui-mainnet-eu-3.cosmostation.io",
   "https://sui1mainnet-rpc.chainode.tech",
   "https://mainnet.sui.rpcpool.com",
@@ -43,55 +49,24 @@ const provider = new SuiClient({
   url: RPC,
 });
 
+const turbos = new TurbosSdk(Network.mainnet);
+
 let worker: Worker | null = null;
-
-function recoverWallet(): Ed25519Keypair | null {
-  const val = localStorage.getItem(WALLET_KEY);
-  if (!val) {
-    return null;
-  }
-  const decoded = decodeSuiPrivateKey(val);
-
-  return Ed25519Keypair.fromSecretKey(decoded.secretKey);
-}
-
-function recoverMiningProgress(): { nonce: bigint; hash: Uint8Array } | null {
-  const val = localStorage.getItem(MINE_KEY);
-  if (!val) {
-    return null;
-  }
-  const decoded = JSON.parse(val);
-
-  return { nonce: BigInt(decoded.nonce), hash: new Uint8Array(decoded.hash) };
-}
-
-function persistMiningProgress({
-  nonce,
-  hash,
-}: {
-  nonce: bigint;
-  hash: Uint8Array;
-}) {
-  localStorage.setItem(
-    MINE_KEY,
-    JSON.stringify({
-      nonce: nonce.toString(),
-      hash: Array.from(hash),
-    })
-  );
-}
 
 (async () => {
   let wallet = recoverWallet();
   const app: ElmApp = Elm.Main.init({
     node: document.getElementById("app"),
     flags: {
+      rpc: [RPC, RPCS],
       time: Date.now(),
       wallet: wallet
         ? { pub: wallet.toSuiAddress(), pvt: wallet.getSecretKey() }
         : null,
     },
   });
+
+  ////  ports registration start
 
   app.ports.fetchStats.subscribe(() =>
     (async () => {
@@ -105,6 +80,8 @@ function persistMiningProgress({
         rewardRate: Number(bus.rewardRate),
       };
       app.ports.statsCb.send(stats);
+      const rtns = await calcSwapVsMine(turbos, bus.rewardRate);
+      app.ports.swapDataCb.send(rtns);
     })().catch((e) => {
       console.error(e);
     })
@@ -113,6 +90,7 @@ function persistMiningProgress({
   app.ports.clearWallet.subscribe(() => {
     wallet = null;
     localStorage.removeItem(WALLET_KEY);
+    localStorage.removeItem(MINE_KEY);
   });
 
   app.ports.registerMiner.subscribe(() =>
@@ -121,11 +99,10 @@ function persistMiningProgress({
         return;
       }
 
-      const proof = await getOrCreateMiner(wallet, provider);
-      const _miner = await Miner.fetch(provider, proof);
+      const miner = await getOrCreateMiner(wallet, provider);
 
       return app.ports.minerCreatedCb.send({
-        address: proof,
+        address: miner.id,
         claims: 0,
       });
     })().catch((e) => {
@@ -138,11 +115,29 @@ function persistMiningProgress({
       if (!wallet) {
         return app.ports.balancesCb.send(null);
       }
-      const balances = await fetchBalances(provider, wallet.toSuiAddress());
-      app.ports.balancesCb.send(balances);
+      await updateBalances(app, provider, wallet.toSuiAddress());
     })().catch((e) => {
       console.error(e);
       app.ports.balancesCb.send(null);
+    })
+  );
+
+  app.ports.combineCoins.subscribe(() =>
+    (async () => {
+      if (wallet) {
+        const coins = await fetchMineral(provider, wallet.toSuiAddress());
+
+        const txb = new Transaction();
+        txb.mergeCoins(
+          coins[0].coinObjectId,
+          coins.slice(1).map((coin) => coin.coinObjectId)
+        );
+        const _sig = await estimateGasAndSubmit(txb, provider, wallet);
+        updateBalances(app, provider, wallet.toSuiAddress());
+      }
+    })().catch((e) => {
+      console.error(e);
+      alert(e.message);
     })
   );
 
@@ -158,18 +153,19 @@ function persistMiningProgress({
       wallet = kp;
 
       const pub = kp.toSuiAddress();
-      app.ports.walletCb.send({ pub, pvt: kp.getSecretKey() });
-      const proof = await getProof(provider, pub);
-      if (proof) {
-        app.ports.minerAccountCb.send({
-          address: proof,
-          claims: 0,
-        });
-        await updateBalances(app, provider, pub);
-      } else {
-        const balances = await fetchBalances(provider, pub);
-        app.ports.balancesCb.send(balances);
-      }
+      const miner = await getProof(provider, pub);
+      app.ports.walletCb.send({
+        address: pub,
+        privateKey: kp.getSecretKey(),
+        balances: null,
+        miningAccount: miner
+          ? {
+              address: miner.id,
+              claims: 0,
+            }
+          : null,
+      });
+      await updateBalances(app, provider, pub);
     })().catch((e) => {
       console.error(e);
     })
@@ -187,17 +183,7 @@ function persistMiningProgress({
   });
 
   if (wallet) {
-    (async () => {
-      const proof = await getProof(provider, wallet.toSuiAddress());
-      if (proof) {
-        console.log("mining account loaded");
-        await updateBalances(app, provider, wallet.toSuiAddress());
-      } else {
-        console.log("no mining account");
-        const balances = await fetchBalances(provider, wallet.toSuiAddress());
-        app.ports.balancesCb.send(balances);
-      }
-    })().catch(console.error);
+    updateBalances(app, provider, wallet.toSuiAddress()).catch(console.error);
   }
 
   app.ports.claim.subscribe((_) =>
@@ -209,49 +195,31 @@ function persistMiningProgress({
     })
   );
 
-  app.ports.submitProof.subscribe(({ proof, miner }) =>
+  app.ports.submitProof.subscribe((proofData) =>
     (async () => {
       console.log("start submit");
       if (!wallet) {
         return;
       }
-      const nonce = BigInt(proof.nonce);
-
-      const handleEvent = (ev: MineEvent) => {
-        switch (ev) {
-          case "submitting": {
-            console.log("submitting transaction...");
-            app.ports.statusCb.send("3");
-            break;
-          }
-          default: {
-            console.log(ev);
-          }
-        }
-      };
-      const res = await submitProof(
-        wallet,
-        nonce,
-        provider,
-        miner,
-        handleEvent
-      );
-
-      if (!res) {
+      const validBus = await findValidBus(provider);
+      if (!validBus) {
+        app.ports.statusCb.send(5);
+        await waitUntilNextEpoch(provider);
         console.log("retrying");
-        return app.ports.retrySubmitProof.send({ proof, miner });
+        return app.ports.retrySubmitProof.send(proofData);
       }
 
-      console.log("Mining success!", res.digest);
-      app.ports.statusCb.send("4");
+      console.log("submitting transaction...");
+      app.ports.statusCb.send(3);
+      const res = await submitProof(wallet, provider, proofData, validBus);
 
-      // Clear progress tracker
-      localStorage.removeItem(MINE_KEY);
+      console.log("Mining success!", res.digest);
+      app.ports.statusCb.send(4);
 
       updateBalances(app, provider, wallet.toSuiAddress()).catch(console.error);
     })().catch((e) => {
       console.error(e);
-      app.ports.miningError.send(String(e));
+      app.ports.proofSubmitError.send(String(e));
     })
   );
 
@@ -267,7 +235,6 @@ function persistMiningProgress({
         worker.onmessage = (e) =>
           (async () => {
             if (!wallet) {
-              // TODO should stop worker
               throw Error("Wallet unavailable");
             }
 
@@ -282,7 +249,11 @@ function persistMiningProgress({
             if ("proof" in e.data) {
               const mineRes: MineResult = e.data;
               console.log("proof solved with nonce:", mineRes.nonce.toString());
-              app.ports.statusCb.send("2");
+              persistMiningProgress({
+                nonce: mineRes.nonce,
+                hash: mineRes.currentHash,
+              });
+              app.ports.statusCb.send(2);
               if (worker) {
                 worker.terminate();
                 worker = null;
@@ -293,14 +264,14 @@ function persistMiningProgress({
               });
             }
 
-            // TODO should stop worker
             throw Error("Unknown worker response");
-          })().catch(
-            //TODO handle crash
-            console.error
-          );
+          })().catch((e) => {
+            console.error(e);
+            app.ports.miningError.send("Message handling failure");
+          });
         worker.onerror = (e) => {
           console.error(e);
+          app.ports.miningError.send("Worker error");
         };
       }
 
@@ -316,24 +287,38 @@ function persistMiningProgress({
       console.error(e);
     })
   );
+
+  ////  ports registration end
 })().catch(console.error);
 
 async function fetchBalances(
   client: SuiClient,
   address: string
 ): Promise<Balances> {
-  const [mineralBalance, suiBalance] = await Promise.all([
-    client.getBalance({
-      owner: address,
+  const [mineralObjs, suiBalance] = await Promise.all([
+    client.getCoins({
       coinType: MINE.$typeName,
+      owner: address,
     }),
     client.getBalance({
       owner: address,
       coinType: SUI_TYPE_ARG,
     }),
   ]);
+
+  mineralObjs.data.sort((a, b) => Number(a.balance) - Number(b.balance));
+  mineralObjs.data.reverse();
+  const largestBalance = mineralObjs.data[0];
+
+  const mineralBalance = mineralObjs.data.reduce(
+    (acc, obj) => acc + BigInt(obj.balance),
+    BigInt(0)
+  );
+
   return {
-    mineral: Number(mineralBalance.totalBalance),
+    coinObject: largestBalance ? largestBalance.coinObjectId : null,
+    mineralObjects: mineralObjs.data.length,
+    mineral: Number(mineralBalance),
     sui: Number(suiBalance.totalBalance),
   };
 }
@@ -368,4 +353,45 @@ async function buildMiningConfig(
     difficulty: difficulty,
     initialNonce,
   };
+}
+
+async function fetchMineral(client: SuiClient, address: string) {
+  const res = await client.getCoins({
+    coinType: MINE.$typeName,
+    owner: address,
+  });
+  const coins = res.data;
+  coins.sort((a, b) => Number(a.balance) - Number(b.balance));
+  coins.reverse();
+  return coins;
+}
+
+function recoverWallet(): Ed25519Keypair | null {
+  const val = localStorage.getItem(WALLET_KEY);
+  if (!val) {
+    return null;
+  }
+  const decoded = decodeSuiPrivateKey(val);
+
+  return Ed25519Keypair.fromSecretKey(decoded.secretKey);
+}
+
+function recoverMiningProgress(): MineProgress | null {
+  const val = localStorage.getItem(MINE_KEY);
+  if (!val) {
+    return null;
+  }
+  const decoded = JSON.parse(val);
+
+  return { nonce: BigInt(decoded.nonce), hash: new Uint8Array(decoded.hash) };
+}
+
+function persistMiningProgress(data: MineProgress) {
+  localStorage.setItem(
+    MINE_KEY,
+    JSON.stringify({
+      nonce: data.nonce.toString(),
+      hash: Array.from(data.hash),
+    })
+  );
 }
