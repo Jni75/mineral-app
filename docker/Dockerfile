@@ -17,4 +17,4 @@ COPY --from=build /app/mineral-app/cli/index.js index.js
 
 ENV WALLET=
 
-CMD [ "node", "index.js", "mine" ]
+CMD [ "node", "index.js", "mine", "--track-progress" ]

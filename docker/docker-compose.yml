@@ -10,6 +10,8 @@ services:
     env_file: .env
     environment:
       WALLET: ${WALLET1}
+    volumes:
+      - ./mineral1.txt:/usr/local/bin/mineral.txt
 
   miner2:
     image: sui/mineral-cli
@@ -20,6 +22,8 @@ services:
     env_file: .env
     environment:
       WALLET: ${WALLET2}
+    volumes:
+      - ./mineral2.txt:/usr/local/bin/mineral.txt
 
   miner3:
     image: sui/mineral-cli
@@ -30,6 +34,8 @@ services:
     env_file: .env
     environment:
       WALLET: ${WALLET3}
+    volumes:
+      - ./mineral3.txt:/usr/local/bin/mineral.txt
 
   miner4:
     image: sui/mineral-cli
@@ -40,6 +46,8 @@ services:
     env_file: .env
     environment:
       WALLET: ${WALLET4}
+    volumes:
+      - ./mineral4.txt:/usr/local/bin/mineral.txt
 
   miner5:
     image: sui/mineral-cli
@@ -50,6 +58,8 @@ services:
     env_file: .env
     environment:
       WALLET: ${WALLET5}
+    volumes:
+      - ./mineral5.txt:/usr/local/bin/mineral.txt
 
   miner6:
     image: sui/mineral-cli
@@ -60,3 +70,5 @@ services:
     env_file: .env
     environment:
       WALLET: ${WALLET6}
+    volumes:
+      - ./mineral6.txt:/usr/local/bin/mineral.txt
