@@ -3,6 +3,8 @@ const webpack = require("webpack");
 
 const publicFolder = resolve("./public");
 
+const { BACKEND } = process.env;
+
 module.exports = (env) => {
   const devMode = Boolean(env.WEBPACK_SERVE);
 
@@ -47,11 +49,24 @@ module.exports = (env) => {
           use: "ts-loader",
           exclude: /node_modules/,
         },
+        {
+          test: /\.css$/,
+          use: ["style-loader", "css-loader"],
+        },
+        {
+          test: /\.woff2$/,
+          type: "asset/inline",
+        },
       ],
     },
     resolve: {
       extensions: [".ts", ".js"],
     },
-    plugins: [new webpack.NoEmitOnErrorsPlugin()],
+    plugins: [
+      new webpack.NoEmitOnErrorsPlugin(),
+      new webpack.DefinePlugin({
+        BACKEND: JSON.stringify(BACKEND),
+      }),
+    ],
   };
 };
